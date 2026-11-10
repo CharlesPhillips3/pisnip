@@ -39,7 +39,7 @@ except ImportError:
     sys.exit(1)
 
 APP_NAME = "PiSnip"
-VERSION = "1.1"
+VERSION = "1.2"
 HOME = os.path.expanduser("~")
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "pisnip")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
@@ -250,7 +250,16 @@ def grab_screen():
     os.close(fd)
     try:
         if is_wayland() and have("grim"):
-            r = subprocess.run(["grim", tmp], capture_output=True, timeout=20)
+            # Raw PPM over a pipe: no PNG compress/decompress, which costs about a second on a Pi 400
+            try:
+                r = subprocess.run(["grim", "-t", "ppm", "-"], capture_output=True, timeout=20)
+                if r.returncode == 0 and r.stdout:
+                    im = Image.open(io.BytesIO(r.stdout))
+                    im.load()
+                    return im.convert("RGB")
+            except Exception:
+                pass
+            r = subprocess.run(["grim", "-l", "0", tmp], capture_output=True, timeout=20)
             if r.returncode == 0:
                 with Image.open(tmp) as im:
                     return im.convert("RGB")
@@ -1106,9 +1115,10 @@ class SnipOverlay:
         self.scale = shot.width / sw if abs(shot.width - sw) > 1 else 1.0
         disp = shot if self.scale == 1.0 else shot.resize((round(shot.width / self.scale), round(shot.height / self.scale)), BILINEAR)
         self.disp_size = disp.size
-        dim = Image.blend(disp, Image.new("RGB", disp.size, (0, 0, 0)), 0.45)
-        self.bright = ImageTk.PhotoImage(disp, master=t)
-        self.dim = ImageTk.PhotoImage(dim, master=t)
+        self._disp = disp
+        self.dim = ImageTk.PhotoImage(disp.point(lambda v: v * 55 // 100), master=t)
+        self.bright = None  # made just after the overlay appears (see _make_bright)
+        self._pending = None  # latest pointer event, drawn once per frame
         self.region = tk.PhotoImage(master=t)
 
         c = self.c = tk.Canvas(t, highlightthickness=0, bd=0, bg="black", cursor="crosshair")
@@ -1153,7 +1163,29 @@ class SnipOverlay:
         t.protocol("WM_DELETE_WINDOW", self.cancel)
         self.set_mode(self.mode, initial=True)
         t.after(60, self._settle)
+        t.after(90, self._make_bright)
         t.after(400, self._settle)
+
+    def _make_bright(self):
+        if self.bright is None and not self.finished:
+            self.bright = ImageTk.PhotoImage(self._disp, master=self.top)
+            self._disp = None
+
+    # Pointer events arrive far faster than a Pi can redraw a full-screen canvas. Keep only the
+    # newest one and draw it once per frame, so the selection follows the mouse instead of lagging.
+    def _queue(self, kind, e):
+        first = self._pending is None
+        self._pending = (kind, e.x, e.y)
+        if first:
+            self.top.after(12, self._flush)
+
+    def _flush(self):
+        p, self._pending = self._pending, None
+        if not p or self.finished:
+            return
+        kind, x, y = p
+        e = type("E", (), {"x": x, "y": y})()
+        (self._do_drag if kind == "drag" else self._do_motion)(e)
 
     # coordinate helpers: canvas -> shot pixels
     def to_shot(self, x, y):
@@ -1236,6 +1268,7 @@ class SnipOverlay:
             self._clear_sel()
             return
         self.sel = (x1, y1, x2, y2)
+        self._make_bright()
         self.region.blank()
         self.region.tk.call(self.region, "copy", self.bright, "-from", dx1, dy1, dx2, dy2, "-to", 0, 0, "-shrink")
         self.c.coords(self.reg_id, dx1 - self.ox, dy1 - self.oy)
@@ -1272,6 +1305,12 @@ class SnipOverlay:
             self.c.itemconfigure(self.free_id, state="normal")
 
     def _drag(self, e):
+        self._queue("drag", e)
+
+    def _motion(self, e):
+        self._queue("motion", e)
+
+    def _do_drag(self, e):
         self._guides(e)
         if self._rect_like() and self.start:
             x0, y0 = self.start
@@ -1283,7 +1322,7 @@ class SnipOverlay:
                 self.c.coords(self.free_id, *[v for p in self.pts + [self.pts[0]] for v in p]) if len(self.pts) > 2 else \
                     self.c.coords(self.free_id, *[v for p in self.pts for v in p])
 
-    def _motion(self, e):
+    def _do_motion(self, e):
         self._guides(e)
         if self.mode == "window" and self.wins:
             r = self._win_at(e.x, e.y)
@@ -1294,7 +1333,10 @@ class SnipOverlay:
                 self._clear_sel()
 
     def _release(self, e):
+        self._pending = None
         if self._rect_like() and self.start:
+            x0, y0 = self.start
+            self._show_sel(min(x0, e.x), min(y0, e.y), max(x0, e.x), max(y0, e.y))
             self.start = None
             if self.sel:
                 x1, y1, x2, y2 = self.sel
@@ -1303,7 +1345,7 @@ class SnipOverlay:
                     return
             self._clear_sel()
         elif self.mode == "freeform" and self.pts:
-            pts, self.pts = self.pts, []
+            pts, self.pts = self.pts + [(e.x, e.y)], []
             if len(pts) >= 3:
                 sp = [self.to_shot(x, y) for x, y in pts]
                 mask = Image.new("L", self.shot.size, 0)
@@ -2739,7 +2781,7 @@ class App:
         elif delay > 0:
             self.root.after(250, lambda: Countdown(self, delay, capture))
         else:
-            self.root.after(350 if hidden else 50, capture)
+            self.root.after(220 if hidden else 30, capture)
 
     def finish_capture(self, img, hotkey=False, target=None):
         s = self.settings
