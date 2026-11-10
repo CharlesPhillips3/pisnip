@@ -14,7 +14,7 @@ The full illustrated user manual is in [PiSnip-Manual.pdf](PiSnip-Manual.pdf).
 
 ## Install (on the Pi)
 
-1. Download this repo to the Pi (green **Code** button → **Download ZIP**, or `git clone https://github.com/hardwaremack-prog/pisnip`) and unzip it.
+1. Download this repo to the Pi (green **Code** button → **Download ZIP**, or `git clone https://github.com/CharlesPhillips3/pisnip`) and unzip it.
 2. Open a Terminal in the unzipped folder and run:
 
    ```
