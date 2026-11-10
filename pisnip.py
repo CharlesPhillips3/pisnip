@@ -1765,7 +1765,7 @@ class Editor:
 
     def _update_title(self):
         name = os.path.basename(self.path) if self.path else "Untitled snip"
-        self.win.title(f"{'● ' if self.dirty else ''}{name} — {APP_NAME}")
+        self.win.title(f"{'● ' if self.dirty else ''}{name} — {APP_NAME} v{VERSION}")
         W, H = self.base.size
         where = f"Saved: {self.path}" if self.path and not self.dirty else ("Unsaved changes" if self.dirty else "")
         self.status.configure(text=f"{W} × {H} px     {where}")
@@ -2239,7 +2239,7 @@ class TextActions:
         ed.finish_text()
         self.img = ed.base.copy()  # read the screenshot itself, not the ink on top of it
         t = self.top = tk.Toplevel(ed.win)
-        t.title(f"Text actions — {APP_NAME}")
+        t.title(f"Text actions — {APP_NAME} v{VERSION}")
         t.transient(ed.win)
         t.geometry("560x420")
         f = ttk.Frame(t, padding=10)
@@ -2339,7 +2339,7 @@ class SettingsDialog:
         s = app.settings
         app.dialogs += 1
         t = self.top = tk.Toplevel(parent or app.root)
-        t.title(f"Settings — {APP_NAME}")
+        t.title(f"Settings — {APP_NAME} v{VERSION}")
         t.resizable(False, False)
         t.protocol("WM_DELETE_WINDOW", self.close)
         f = ttk.Frame(t, padding=14)
@@ -2471,7 +2471,7 @@ class App:
         self.launcher_visible = False
         root = self.root = tk.Tk(className="pisnip")
         root.withdraw()
-        root.title(APP_NAME)
+        root.title(f"{APP_NAME} v{VERSION}")
         self._style()
         try:
             self.icon = ImageTk.PhotoImage(make_icon_image(64))
@@ -2547,7 +2547,7 @@ class App:
     def _build_launcher(self):
         """Compact main window modelled on the Windows 11 Snipping Tool."""
         r, s = self.root, self.settings
-        r.title("Snipping Tool")
+        r.title(f"Snipping Tool — {APP_NAME} v{VERSION}")
         r.resizable(True, False)
         r.protocol("WM_DELETE_WINDOW", self.close_launcher)
         BG, HOVER, SEL, FG = "#f3f3f3", "#e5e5e5", "#dcebf9", "#1f1f1f"
