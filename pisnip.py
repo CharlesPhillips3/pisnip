@@ -39,13 +39,22 @@ except ImportError:
     sys.exit(1)
 
 APP_NAME = "PiSnip"
-VERSION = "1.0"
+VERSION = "1.1"
 HOME = os.path.expanduser("~")
 CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config"), "pisnip")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.json")
 
 _R = getattr(Image, "Resampling", Image)
 LANCZOS, BILINEAR = _R.LANCZOS, _R.BILINEAR
+_T = getattr(Image, "Transpose", Image)
+# rotate / flip operations for the editor: name -> (PIL transpose, label)
+TRANSFORMS = {
+    "right": (_T.ROTATE_270, "Rotate right 90°"),
+    "left": (_T.ROTATE_90, "Rotate left 90°"),
+    "180": (_T.ROTATE_180, "Rotate 180°"),
+    "fliph": (_T.FLIP_LEFT_RIGHT, "Flip horizontal"),
+    "flipv": (_T.FLIP_TOP_BOTTOM, "Flip vertical"),
+}
 SS = 2  # supersampling factor for smooth ink
 
 MODES = [("rectangle", "Rectangle"), ("window", "Window"), ("freeform", "Freeform"), ("full", "Full screen")]
@@ -425,6 +434,39 @@ def shift_ann(a, dx, dy):
     else:
         b["p1"] = (a["p1"][0] + dx, a["p1"][1] + dy)
         b["p2"] = (a["p2"][0] + dx, a["p2"][1] + dy)
+    return b
+
+
+def transform_point(op, x, y, W, H):
+    """Map a point on a W x H image to where it lands after rotate/flip `op`."""
+    # PIL draws integer coordinates at pixel centres, so the far edge is W - 1 / H - 1
+    W, H = W - 1, H - 1
+    if op == "right":
+        return (H - y, x)
+    if op == "left":
+        return (y, W - x)
+    if op == "180":
+        return (W - x, H - y)
+    if op == "fliph":
+        return (W - x, y)
+    if op == "flipv":
+        return (x, H - y)
+    return (x, y)
+
+
+def transform_ann(a, op, W, H):
+    """Rotate/flip an annotation along with its W x H image (text is handled by the editor)."""
+    b = {k: v for k, v in a.items() if k != "_m"}
+    t = a["type"]
+    P = lambda p: transform_point(op, p[0], p[1], W, H)
+    if t in ("pen", "hl"):
+        b["pts"] = [P(p) for p in a["pts"]]
+    elif t == "redact":
+        x0, y0, x1, y1 = a["box"]
+        (ax, ay), (bx, by) = P((x0, y0)), P((x1, y1))
+        b["box"] = (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+    elif t in ("line", "arrow", "rect", "ellipse"):
+        b["p1"], b["p2"] = P(a["p1"]), P(a["p2"])
     return b
 
 
@@ -1556,6 +1598,17 @@ class Editor:
                 continue
             ttk.Radiobutton(bar2, text=label, value=key, variable=self.tool, style="Toolbutton",
                             command=self._tool_changed).pack(side="left", padx=1)
+        rot = ttk.Menubutton(bar2, text="⟳ Rotate", width=7)
+        rm = tk.Menu(rot, tearoff=False)
+        rm.add_command(label="Rotate right 90°      Ctrl+R", command=lambda: self.rotate("right"))
+        rm.add_command(label="Rotate left 90°        Ctrl+L", command=lambda: self.rotate("left"))
+        rm.add_command(label="Rotate 180°", command=lambda: self.rotate("180"))
+        rm.add_separator()
+        rm.add_command(label="Flip horizontal", command=lambda: self.rotate("fliph"))
+        rm.add_command(label="Flip vertical", command=lambda: self.rotate("flipv"))
+        rot["menu"] = rm
+        rot.pack(side="left", padx=1)
+        Tooltip(rot, "Rotate or flip the snip")
         ttk.Separator(bar2, orient="vertical").pack(side="left", fill="y", padx=6)
         self.swatches = []
         for col in PALETTE:
@@ -1625,6 +1678,7 @@ class Editor:
             "<Control-p>": self.print_img, "<Control-plus>": lambda: self.set_zoom(self.zoom * 1.25),
             "<Control-equal>": lambda: self.set_zoom(self.zoom * 1.25), "<Control-minus>": lambda: self.set_zoom(self.zoom / 1.25),
             "<Control-0>": lambda: self.set_zoom(1.0), "<Control-w>": self.close,
+            "<Control-r>": lambda: self.rotate("right"), "<Control-l>": lambda: self.rotate("left"),
         }
         for k, fn in keys.items():
             w.bind(k, lambda e, fn=fn: None if self._typing(e) else (fn(), "break")[1])
@@ -1657,7 +1711,7 @@ class Editor:
             sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
             z = min(1.0, (sw * 0.85 - 30) / W, (sh * 0.82 - 150) / H)
             self.zoom = max(0.1, z)
-            ww = max(1020, min(int(sw * 0.9), int(W * self.zoom) + 40))
+            ww = max(1160, min(int(sw * 0.9), int(W * self.zoom) + 40))
             wh = max(460, min(int(sh * 0.9), int(H * self.zoom) + 150))
             self.win.geometry(f"{ww}x{wh}")
             self.refresh()
@@ -1973,6 +2027,35 @@ class Editor:
         self.recompose()
         self.mark_dirty()
         self.fit_zoom()
+
+    # ---------- rotate / flip
+    def rotate(self, op):
+        """Rotate or flip the snip together with all of its mark-up (undoable)."""
+        if op not in TRANSFORMS:
+            return
+        self.finish_text()
+        if self.tool.get() == "crop":
+            self.cancel_crop_tool()
+        self.push_undo()
+        base, anns = self.base, self.anns
+        # Text is drawn upright, so it can't simply be moved. Burn everything up to the
+        # last text label into the picture (keeps the stacking order); the strokes and
+        # shapes after it stay editable and are moved point by point.
+        last_text = max((i for i, a in enumerate(anns) if a["type"] == "text"), default=-1)
+        if last_text >= 0:
+            base = base.copy()
+            for a in anns[:last_text + 1]:
+                render_ann(base, a)
+            anns = anns[last_text + 1:]
+        W, H = base.size
+        self.base = base.transpose(TRANSFORMS[op][0])
+        self.anns = [transform_ann(a, op, W, H) for a in anns]
+        self.recompose()
+        self.mark_dirty()
+        if op in ("right", "left"):
+            self.fit_zoom()
+        self.status.configure(text=f"{TRANSFORMS[op][1]}     {self.base.width} × {self.base.height} px")
+        self.win.after(2500, self._update_title)
 
     # ---------- actions
     def copy(self):

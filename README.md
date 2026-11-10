@@ -50,6 +50,7 @@ If a shortcut doesn't respond straight away, log out and back in once.
 - Pen, Highlighter, and an Eraser that removes whole strokes.
 - Line, Arrow, Rectangle, Ellipse and Text.
 - Crop.
+- **Rotate** right or left 90°, 180°, and flip horizontal / vertical (⟳ Rotate menu, Ctrl+R / Ctrl+L). Your mark-up turns with the picture, and it's all undoable.
 - Colour palette plus a custom colour, and a size slider.
 - Undo and Redo, Erase all ink, Revert to original.
 - Zoom (Ctrl + mouse wheel, Ctrl +/−/0, Fit).
@@ -63,7 +64,7 @@ If a shortcut doesn't respond straight away, log out and back in once.
 **Settings** (⋯ menu → Settings): save folders, auto-save and auto-copy, format, "ask to save edits", open the editor after shortcut snips, multiple windows, border, recording frame rate, and a system check that shows which helper tools are installed.
 
 ## Keyboard shortcuts in the editor
-Ctrl+N new snip · Ctrl+S save as · Ctrl+C copy · Ctrl+Z / Ctrl+Y undo/redo · Ctrl+O open · Ctrl+P print · Ctrl+W close · Enter to apply a crop · Esc to cancel
+Ctrl+N new snip · Ctrl+S save as · Ctrl+C copy · Ctrl+Z / Ctrl+Y undo/redo · Ctrl+O open · Ctrl+P print · Ctrl+R / Ctrl+L rotate right / left · Ctrl+W close · Enter to apply a crop · Esc to cancel
 
 ## Notes
 - **Window mode** needs the X11 desktop. On the default Wayland desktop, apps can't see where other windows are, so PiSnip asks you to drag around the window instead. To get click-a-window snips, switch to X11: `sudo raspi-config` → Advanced Options → Wayland → X11, then reboot.
